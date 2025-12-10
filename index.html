@@ -1,4 +1,1531 @@
-<script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PR/PO Follow-up Tracker with Multi-View Calendar</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for better aesthetics and readability */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        :root {
+            --primary: #4f46e5;
+            --primary-light: #6366f1;
+            --secondary: #10b981;
+            --bg-dark: #f8f8f8;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+        }
+        .container {
+            max-width: 1400px;
+        }
+        /* Custom scrollbar for table */
+        .scroll-container::-webkit-scrollbar {
+            height: 8px;
+        }
+        .scroll-container::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1;
+            border-radius: 4px;
+        }
+        .scroll-container::-webkit-scrollbar-track {
+            background-color: #f1f5f9;
+        }
+        
+        /* Calendar Styles for Month View */
+        .calendar-day-cell {
+            @apply p-2 rounded-lg border border-gray-200 shadow-sm bg-white;
+            min-height: 120px; 
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; 
+        }
+        .calendar-day-cell.is-today {
+            @apply bg-indigo-50 border-indigo-500;
+        }
+        .calendar-day-number {
+            @apply font-bold mb-1;
+        }
+        .calendar-day-cell.is-today .calendar-day-number {
+            @apply text-indigo-700;
+        }
+
+        /* Calendar Event Styles (Applicable to all views) */
+        .calendar-day-entry {
+            @apply bg-yellow-100 text-yellow-800 font-semibold p-1 mt-1 text-xs rounded-lg cursor-pointer hover:bg-yellow-200 transition-colors;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            z-index: 10;
+        }
+
+        /* Styles for Day/Week View */
+        .time-grid-container {
+            display: grid;
+            grid-template-columns: 60px 1fr; /* Time column and event area */
+            max-height: 70vh;
+            overflow-y: auto;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            background-color: white;
+        }
+        .time-column {
+            grid-column: 1;
+            padding-top: 20px;
+            font-size: 0.75rem;
+            color: #6b7280;
+            text-align: right;
+            border-right: 1px solid #e5e7eb;
+            position: sticky;
+            top: 0;
+            background-color: #fff;
+            z-index: 20;
+        }
+        .time-label {
+            height: 60px; /* Matching the grid row height */
+            padding-right: 8px;
+            margin-top: -10px;
+        }
+        .time-grid {
+            grid-column: 2;
+            display: grid;
+            /* Grid rows for 24 hours */
+            grid-template-rows: repeat(24, 60px); 
+            position: relative;
+            z-index: 1;
+        }
+        .time-grid-line {
+            border-bottom: 1px solid #f3f4f6;
+            width: 100%;
+            height: 100%;
+        }
+        .day-view-column {
+            position: relative;
+            border-left: 1px solid #e5e7eb;
+            height: 100%;
+        }
+        
+        /* UPDATED WEEK VIEW STYLES */
+        .week-view-header, .week-all-day-row {
+            display: grid;
+            grid-template-columns: 60px repeat(7, 1fr); /* Time column width + 7 days */
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .week-view-header {
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--primary);
+            margin-bottom: 0; 
+        }
+        .week-view-day-header {
+            text-align: center;
+            font-weight: 600;
+            padding: 4px;
+            cursor: pointer;
+        }
+        .week-all-day-row {
+            background-color: #f8f8f8;
+            padding: 4px 0;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .all-day-label {
+            grid-column: 1;
+            font-size: 0.75rem;
+            color: #6b7280;
+            text-align: right;
+            padding-right: 8px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+        }
+        .all-day-events-grid {
+            grid-column: 2 / span 7;
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+        }
+        .all-day-day-cell {
+            border-right: 1px solid #e5e7eb;
+            min-height: 40px;
+            padding: 2px;
+            overflow-y: auto;
+            max-height: 100px; /* Limit height for all-day cells */
+        }
+        .all-day-day-cell:last-child {
+            border-right: none;
+        }
+
+        /* Event positioning (simplified for timeline simulation) - Kept but unused in new week/day view */
+        .timeline-event {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 30px; /* Fixed height for visual consistency */
+            z-index: 2;
+        }
+
+    </style>
+</head>
+<body class="p-4 md:p-8">
+
+    <div class="container mx-auto">
+        <header class="mb-8">
+            <h1 class="text-4xl font-extrabold text-gray-900 mb-2">Follow-up Tracker</h1>
+            <p class="text-gray-500">Manage, track, and update all your Purchase Requests and Orders. (Data saved locally on this browser.)</p>
+        </header>
+
+        <div id="notification" class="hidden fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg font-medium transition-opacity duration-300" role="alert"></div>
+
+
+        <div class="mb-6 border-b border-gray-200">
+            <ul class="flex flex-wrap -mb-px text-sm font-medium text-center" id="myTab" data-tabs-toggle="#myTabContent" role="tablist">
+                <li class="mr-2" role="presentation">
+                    <button id="form-tab" data-tab-target="#form" type="button" role="tab" aria-controls="form" aria-selected="true" class="inline-block p-4 border-b-2 rounded-t-lg text-indigo-600 border-indigo-600 hover:text-indigo-600 hover:border-indigo-300">New Entry / Update</button>
+                </li>
+                <li class="mr-2" role="presentation">
+                    <button id="table-tab" data-tab-target="#table" type="button" role="tab" aria-controls="table" aria-selected="false" class="inline-block p-4 border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300">Data Table (All Entries)</button>
+                </li>
+                <li role="presentation">
+                    <button id="calendar-tab" data-tab-target="#calendar" type="button" role="tab" aria-controls="calendar" aria-selected="false" class="inline-block p-4 border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300">Calendar View</button>
+                </li>
+            </ul>
+        </div>
+
+        <div id="myTabContent">
+            
+            <div class="p-4 bg-white rounded-lg shadow-xl mb-8 border-t-2 border-indigo-500" id="form" role="tabpanel" aria-labelledby="form-tab">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-6" id="form-title">New Follow-up Entry</h2>
+                <form id="followup-form" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+
+                    <input type="hidden" id="entry-id">
+                    
+                    <div class="col-span-1">
+                        <label for="sNo" class="block text-sm font-medium text-gray-700">S.No</label>
+                        <input type="text" id="sNo" value="Auto-Generated" disabled class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 bg-gray-100 cursor-not-allowed">
+                    </div>
+                    <div class="col-span-1">
+                        <label for="todayDate" class="block text-sm font-medium text-gray-700">Today Date</label>
+                        <input type="date" id="todayDate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+
+                    <div class="col-span-1">
+                        <label for="prPoNo" class="block text-sm font-medium text-gray-700">PR/PO.No.</label>
+                        <input type="text" id="prPoNo" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div class="col-span-1">
+                        <label for="prPoDate" class="block text-sm font-medium text-gray-700">PR/PO Dt:</label>
+                        <input type="date" id="prPoDate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div class="col-span-1">
+                        <label for="deliveryDate" class="block text-sm font-medium text-gray-700">Expected Delivery Date</label>
+                        <input type="date" id="deliveryDate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div class="col-span-1">
+                        <label for="purchaseOfficer" class="block text-sm font-medium text-gray-700">Purchase Officer</label>
+                        <input type="text" id="purchaseOfficer" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+
+                    <div class="col-span-1">
+                        <label for="vendorName" class="block text-sm font-medium text-gray-700">Vendor Name</label>
+                        <input type="text" id="vendorName" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div class="col-span-1">
+                        <label for="vendorPhone" class="block text-sm font-medium text-gray-700">Vendor Phone No.</label>
+                        <input type="tel" id="vendorPhone" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div class="col-span-1">
+                        <label for="vendorEmail" class="block text-sm font-medium text-gray-700">Vendor Email ID</label>
+                        <input type="email" id="vendorEmail" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+
+                    <div class="col-span-1">
+                        <label for="clientName" class="block text-sm font-medium text-gray-700">Client Name</label>
+                        <input type="text" id="clientName" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div class="col-span-1">
+                        <label for="clientPhone" class="block text-sm font-medium text-gray-700">Client Phone No.</label>
+                        <input type="tel" id="clientPhone" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+
+                    <div class="col-span-full md:col-span-2">
+                        <label for="itemDescription" class="block text-sm font-medium text-gray-700">Item Description</label>
+                        <textarea id="itemDescription" rows="2" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border"></textarea>
+                    </div>
+
+                    <div class="col-span-1" id="initial-status-group">
+                        <label for="initialStatus" class="block text-sm font-medium text-gray-700">Current Status</label>
+                        <input type="text" id="initialStatus" value="Order Placed" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+                    <div class="col-span-1" id="initial-remarks-group">
+                        <label for="initialRemarks" class="block text-sm font-medium text-gray-700">Current Remarks</label>
+                        <textarea id="initialRemarks" rows="2" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border"></textarea>
+                    </div>
+                    <div class="col-span-1">
+                        <label for="calendarDate" class="block text-sm font-medium text-gray-700">Calendar Follow-up Date</label>
+                        <input type="date" id="calendarDate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                    </div>
+
+                    <div class="col-span-full flex justify-end space-x-4 pt-4">
+                        <button type="button" id="cancel-update" class="hidden px-4 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow hover:bg-gray-400 transition-colors">
+                            Cancel Update
+                        </button>
+                        <button type="submit" class="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition-colors transform hover:scale-105">
+                            Save Entry
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="hidden" id="table" role="tabpanel" aria-labelledby="table-tab">
+                <div class="bg-white p-6 rounded-lg shadow-xl mb-6 border-t-2 border-indigo-500">
+                    <h2 class="text-2xl font-semibold text-gray-800 mb-4">Entry Dashboard</h2>
+                    
+                    <div class="flex flex-wrap gap-4 mb-4 items-center">
+                        <div class="flex items-center">
+                            <label for="filter-status" class="mr-2 text-sm font-medium text-gray-700">Status:</label>
+                            <select id="filter-status" class="rounded-md border-gray-300 shadow-sm p-2 border">
+                                <option value="All">All</option>
+                                <option value="Open">Open</option>
+                                <option value="Closed">Closed</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center">
+                            <label for="filter-po" class="mr-2 text-sm font-medium text-gray-700">PO Officer:</label>
+                            <select id="filter-po" class="rounded-md border-gray-300 shadow-sm p-2 border">
+                                <option value="All">All</option>
+                            </select>
+                        </div>
+                         <div class="flex items-center">
+                            <label for="filter-client" class="mr-2 text-sm font-medium text-gray-700">Client:</label>
+                            <select id="filter-client" class="rounded-md border-gray-300 shadow-sm p-2 border">
+                                <option value="All">All</option>
+                            </select>
+                        </div>
+                        
+                        <label for="csv-upload" class="ml-auto px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow hover:bg-blue-700 transition-colors cursor-pointer flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm6.293-8.707a1 1 0 011.414 0l2 2a1 1 0 01-1.414 1.414L11 11.414V6a1 1 0 10-2 0v5.414l-1.293-1.293a1 1 0 00-1.414 1.414l2 2z" clip-rule="evenodd" />
+                            </svg>
+                            Import from CSV
+                        </label>
+                        <input type="file" id="csv-upload" accept=".csv" class="hidden">
+
+
+                        <button id="download-csv" class="px-4 py-2 bg-green-600 text-white font-semibold rounded-lg shadow hover:bg-green-700 transition-colors flex items-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L10 11.586l1.293-1.293a1 1 0 111.414 1.414l-2 2a1 1 0 01-1.414 0l-2-2a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                <path fill-rule="evenodd" d="M10 2a1 1 0 011 1v9a1 1 0 11-2 0V3a1 1 0 011-1z" clip-rule="evenodd" />
+                            </svg>
+                            Download to CSV
+                        </button>
+                    </div>
+
+                    <div class="overflow-x-auto scroll-container rounded-lg border border-gray-200">
+                        <table class="min-w-full divide-y divide-gray-200" id="data-table">
+                            <thead class="bg-gray-50 sticky top-0 z-10">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" data-sort-key="sNo">S.No.</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" data-sort-key="prPoNo">PR/PO No.</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" data-sort-key="prPoDate">PR/PO Dt:</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" data-sort-key="deliveryDate">Delivery Dt</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" data-sort-key="vendorName">Vendor Name</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" data-sort-key="itemDescription">Item Description</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" data-sort-key="purchaseOfficer">PO Officer</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" data-sort-key="latestStatus">Latest Status</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer" data-sort-key="status">Open/Close</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200" id="data-table-body">
+                                </tbody>
+                        </table>
+                        <p id="no-data-message" class="p-6 text-center text-gray-500 hidden">No entries found matching the current filters.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hidden p-4 bg-white rounded-lg shadow-xl mb-8 border-t-2 border-indigo-500" id="calendar" role="tabpanel" aria-labelledby="calendar-tab">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4">Follow-up Calendar View</h2>
+                
+                <div class="flex flex-wrap justify-between items-center mb-4">
+                    <div class="flex space-x-2">
+                        <button id="prev-btn" class="p-2 rounded-lg bg-gray-200 hover:bg-gray-300 transition-colors">&larr; Prev</button>
+                        <button id="today-btn" class="p-2 rounded-lg bg-indigo-600 text-white font-semibold hover:bg-indigo-700 transition-colors">Today</button>
+                        <button id="next-btn" class="p-2 rounded-lg bg-gray-200 hover:bg-gray-300 transition-colors">Next &rarr;</button>
+                    </div>
+
+                    <h3 id="current-view-title" class="text-xl font-bold text-center flex-grow mx-4"></h3>
+
+                    <div class="flex space-x-1 rounded-lg bg-gray-200 p-1">
+                        <button data-view="day" class="calendar-view-btn p-2 rounded-lg text-sm font-medium hover:bg-white transition-colors">Day</button>
+                        <button data-view="week" class="calendar-view-btn p-2 rounded-lg text-sm font-medium hover:bg-white transition-colors">Week</button>
+                        <button data-view="month" class="calendar-view-btn p-2 rounded-lg text-sm font-medium bg-white shadow-sm">Month</button>
+                    </div>
+                </div>
+
+                <div id="calendar-content">
+                    </div>
+            </div>
+
+        </div>
+    </div>
+    
+    <div id="update-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg">
+            <div class="p-6 border-b flex justify-between items-center">
+                <h3 class="text-2xl font-bold text-gray-800">Update Status & History</h3>
+                <button onclick="closeModal('update-modal')" class="text-gray-400 hover:text-gray-600">&times;</button>
+            </div>
+            <div class="p-6">
+                <form id="status-update-form" class="mb-6 border-b pb-4">
+                    <input type="hidden" id="modal-entry-id">
+                    <p class="text-lg font-semibold mb-2">Current Entry: <span id="modal-entry-title" class="text-indigo-600 text-base"></span></p>
+                    <div class="grid grid-cols-1 gap-4">
+                        <div>
+                            <label for="newStatus" class="block text-sm font-medium text-gray-700">New Latest Status</label>
+                            <input type="text" id="newStatus" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border">
+                        </div>
+                        <div>
+                            <label for="newRemarks" class="block text-sm font-medium text-gray-700">Remarks for this Update</label>
+                            <textarea id="newRemarks" rows="2" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border"></textarea>
+                        </div>
+                    </div>
+                    <button type="submit" class="mt-4 w-full px-4 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow hover:bg-indigo-700 transition-colors">
+                        Save Status Update
+                    </button>
+                </form>
+
+                <div>
+                    <h4 class="text-xl font-semibold mb-3 text-gray-800">Update History Log</h4>
+                    <div id="update-history-log" class="max-h-60 overflow-y-auto border rounded-lg">
+                        </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <div id="details-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-xl">
+            <div class="p-6 border-b flex justify-between items-center">
+                <h3 class="text-2xl font-bold text-gray-800">Entry Details</h3>
+                <button onclick="closeModal('details-modal')" class="text-gray-400 hover:text-gray-600">&times;</button>
+            </div>
+            <div class="p-6 grid grid-cols-2 gap-4 text-sm" id="details-content">
+                </div>
+            <div class="p-6 pt-0 flex justify-end">
+                <button id="details-edit-button" class="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-lg shadow-md hover:bg-indigo-700 transition-colors transform hover:scale-105">
+                    Edit Entry
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="import-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg">
+            <div class="p-6 border-b flex justify-between items-center">
+                <h3 class="text-2xl font-bold text-gray-800">CSV Import Confirmation</h3>
+                <button onclick="closeModal('import-modal')" class="text-gray-400 hover:text-gray-600">&times;</button>
+            </div>
+            <div class="p-6">
+                <p class="mb-4">You are about to import <span id="import-count" class="font-bold text-indigo-600">0</span> entries.</p>
+                <p class="mb-4 text-sm text-red-600 font-medium">**Warning:** This will add new records to your existing data. Duplicate entries (same PR/PO No.) will be skipped to prevent data corruption.</p>
+                
+                <div class="border rounded-lg p-3 bg-gray-50 text-xs mb-4">
+                    <p class="font-semibold mb-1">Detected Headers (Ensure these match):</p>
+                    <code id="import-headers" class="block whitespace-pre-wrap text-gray-700"></code>
+                </div>
+
+                <div class="flex justify-end space-x-4">
+                    <button onclick="closeModal('import-modal')" class="px-4 py-2 bg-gray-300 text-gray-800 font-semibold rounded-lg shadow hover:bg-gray-400 transition-colors">Cancel</button>
+                    <button id="confirm-import" class="px-6 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow hover:bg-blue-700 transition-colors">
+                        Confirm Import and Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        // ===================================================================================
+        // 1. GLOBAL VARIABLES AND INITIALIZATION
+        // ===================================================================================
+
+        let followUpData = [];
+        let currentSort = { key: 'sNo', direction: 'asc' };
+        const STORAGE_KEY = 'prPoFollowUpData';
+        let currentCalendarDate = new Date();
+        let currentView = 'month'; // 'day', 'week', 'month'
+        let stagingData = []; // Temporary store for CSV import
+
+        // All possible fields in the tracker for mapping purposes
+        const FIELD_MAP = {
+            sNo: 'S.No.',
+            todayDate: 'Today Date',
+            prPoNo: 'PR/PO No.',
+            prPoDate: 'PR/PO Dt:',
+            deliveryDate: 'Expected Delivery Date',
+            purchaseOfficer: 'Purchase Officer',
+            vendorName: 'Vendor Name',
+            vendorPhone: 'Vendor Phone No.',
+            vendorEmail: 'Vendor Email ID',
+            clientName: 'Client Name',
+            clientPhone: 'Client Phone No.',
+            itemDescription: 'Item Description',
+            latestStatus: 'Latest Status',
+            remarks: 'Remarks',
+            calendarDate: 'Calendar Follow-up Date',
+            status: 'Open/Closed Status' 
+        };
+
+        // NEW: Utility function to format dates for display
+        function formatDate(dateString, options = { month: 'short', day: 'numeric', year: 'numeric' }) {
+            if (!dateString) return 'N/A';
+            // Handle 'YYYY-MM-DD' input string
+            const date = new Date(dateString.replace(/-/g, '/')); 
+            if (isNaN(date)) return dateString;
+            return date.toLocaleDateString('en-US', options);
+        }
+
+        // Helper function for showing notifications
+        function showNotification(message, type = 'success', duration = 3000) {
+            const notification = document.getElementById('notification');
+            
+            notification.className = 'fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg font-medium transition-opacity duration-300';
+            
+            if (type === 'success') {
+                notification.classList.add('bg-green-100', 'text-green-800');
+            } else if (type === 'error') {
+                notification.classList.add('bg-red-100', 'text-red-800');
+            } else if (type === 'info') {
+                notification.classList.add('bg-blue-100', 'text-blue-800');
+            } else {
+                notification.classList.add('bg-blue-100', 'text-blue-800');
+            }
+
+            notification.textContent = message;
+            notification.classList.remove('hidden', 'opacity-0');
+            notification.classList.add('opacity-100');
+
+            setTimeout(() => {
+                notification.classList.remove('opacity-100');
+                notification.classList.add('opacity-0');
+                setTimeout(() => notification.classList.add('hidden'), 300);
+            }, duration);
+        }
+
+        // Helper function for modal control
+        function openModal(id) {
+            document.getElementById(id).classList.remove('hidden');
+            document.getElementById(id).classList.add('flex');
+        }
+
+        function closeModal(id) {
+            document.getElementById(id).classList.remove('flex');
+            document.getElementById(id).classList.add('hidden');
+        }
+
+        // Utility function to load data from localStorage
+        function loadData() {
+            const storedData = localStorage.getItem(STORAGE_KEY);
+            if (storedData) {
+                try {
+                    followUpData = JSON.parse(storedData);
+                    // Ensure updateHistory and other defaults exist
+                    followUpData = followUpData.map(entry => ({
+                        ...entry,
+                        updateHistory: entry.updateHistory || [],
+                        status: entry.status || 'Open', 
+                        latestStatus: entry.latestStatus || entry.initialStatus || 'N/A', 
+                        remarks: entry.remarks || entry.initialRemarks || '', 
+                    }));
+                } catch (e) {
+                    console.error("Error parsing stored data:", e);
+                    followUpData = [];
+                }
+            } else {
+                followUpData = [];
+            }
+            renderTable();
+            populateFilters();
+            renderCalendar();
+        }
+
+        // Utility function to save data to localStorage
+        function saveData() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(followUpData));
+            populateFilters();
+        }
+
+        // Utility function to get the next S.No
+        function getNextSNo() {
+            return followUpData.length > 0 ? Math.max(...followUpData.map(e => e.sNo)) + 1 : 1;
+        }
+
+        // Set default date for form
+        function setDefaultDate() {
+            const todayDateInput = document.getElementById('todayDate');
+            if (!todayDateInput.value) {
+                todayDateInput.valueAsDate = new Date();
+            }
+        }
+
+        // ===================================================================================
+        // 2. DATA CRUD OPERATIONS (INCLUDING SUBMISSION)
+        // ===================================================================================
+
+        // Function to reset the form
+        function resetForm() {
+            document.getElementById('followup-form').reset();
+            document.getElementById('entry-id').value = '';
+            document.getElementById('sNo').value = 'Auto-Generated';
+            document.getElementById('form-title').textContent = 'New Follow-up Entry';
+            document.querySelector('#initial-status-group label').textContent = 'Current Status';
+            document.querySelector('#initial-remarks-group label').textContent = 'Current Remarks';
+            document.getElementById('cancel-update').classList.add('hidden');
+            document.querySelector('#followup-form button[type="submit"]').textContent = 'Save Entry';
+            setDefaultDate();
+        }
+
+        // Handles form submission (Add or Edit)
+        document.getElementById('followup-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const entryId = document.getElementById('entry-id').value;
+            const isUpdate = !!entryId;
+            const prPoNo = document.getElementById('prPoNo').value.trim();
+
+            if (!prPoNo) {
+                showNotification('PR/PO.No. is the primary identifier and cannot be empty.', 'error');
+                return;
+            }
+
+            const currentEntryData = {
+                todayDate: document.getElementById('todayDate').value,
+                prPoNo: prPoNo,
+                prPoDate: document.getElementById('prPoDate').value,
+                deliveryDate: document.getElementById('deliveryDate').value,
+                vendorName: document.getElementById('vendorName').value,
+                vendorPhone: document.getElementById('vendorPhone').value,
+                vendorEmail: document.getElementById('vendorEmail').value,
+                itemDescription: document.getElementById('itemDescription').value,
+                purchaseOfficer: document.getElementById('purchaseOfficer').value,
+                clientName: document.getElementById('clientName').value,
+                clientPhone: document.getElementById('clientPhone').value,
+                calendarDate: document.getElementById('calendarDate').value,
+                latestStatus: document.getElementById('initialStatus').value || 'N/A',
+                remarks: document.getElementById('initialRemarks').value || '',
+            };
+
+            if (isUpdate) {
+                const index = followUpData.findIndex(entry => entry.id === entryId);
+                if (index > -1) {
+                    const conflictEntry = followUpData.find(e => e.prPoNo === prPoNo && e.id !== entryId);
+                    if (conflictEntry) {
+                        showNotification(`Error: PR/PO No. ${prPoNo} already exists for S.No. ${conflictEntry.sNo}. Please use a unique number.`, 'error');
+                        return;
+                    }
+                    const oldEntry = followUpData[index];
+                    
+                    // Check for status/remarks change to add to history
+                    if (oldEntry.latestStatus !== currentEntryData.latestStatus || oldEntry.remarks !== currentEntryData.remarks) {
+                        currentEntryData.updateHistory = oldEntry.updateHistory || [];
+                        currentEntryData.updateHistory.push({
+                            date: new Date().toISOString().split('T')[0],
+                            status: currentEntryData.latestStatus,
+                            remark: currentEntryData.remarks,
+                            type: 'Form Edit Update'
+                        });
+                    } else {
+                         currentEntryData.updateHistory = oldEntry.updateHistory;
+                    }
+
+                    // Preserve status and sNo
+                    currentEntryData.sNo = oldEntry.sNo;
+                    currentEntryData.status = oldEntry.status;
+
+                    followUpData[index] = { ...oldEntry, ...currentEntryData };
+                    showNotification(`Entry ${prPoNo} updated successfully!`);
+                }
+            } else {
+                // Check for duplicates before adding
+                if (followUpData.some(e => e.prPoNo === prPoNo)) {
+                    showNotification(`Error: PR/PO No. ${prPoNo} already exists. Please use the Edit function.`, 'error');
+                    return;
+                }
+
+                const newEntry = {
+                    id: crypto.randomUUID(),
+                    sNo: getNextSNo(),
+                    ...currentEntryData,
+                    status: 'Open',
+                    updateHistory: [{ 
+                        date: currentEntryData.todayDate || new Date().toISOString().split('T')[0], 
+                        status: currentEntryData.latestStatus,
+                        remark: currentEntryData.remarks,
+                        type: 'Initial Entry'
+                    }]
+                };
+                followUpData.push(newEntry);
+                showNotification(`Entry ${prPoNo} added successfully!`);
+            }
+
+            saveData();
+            resetForm();
+            renderTable();
+            renderCalendar();
+            document.getElementById('table-tab').click();
+        });
+
+        document.getElementById('cancel-update').addEventListener('click', resetForm);
+
+        // Function to toggle the Open/Closed status
+        function toggleStatus(id) {
+            const index = followUpData.findIndex(e => e.id === id);
+            if (index > -1) {
+                const newStatus = followUpData[index].status === 'Open' ? 'Closed' : 'Open';
+                followUpData[index].status = newStatus;
+                followUpData[index].updateHistory.push({
+                    date: new Date().toISOString().split('T')[0],
+                    status: followUpData[index].latestStatus,
+                    remark: `Entry marked as ${newStatus}`,
+                    type: 'Status Toggle'
+                });
+                saveData();
+                renderTable();
+                renderCalendar();
+                showNotification(`Entry ${followUpData[index].prPoNo} marked as ${newStatus}.`);
+            }
+        }
+
+        // ===================================================================================
+        // 3. EDIT & AUTO-FILL LOGIC
+        // ===================================================================================
+
+        // Function to toggle the form tab
+        function activateFormTab() {
+            const formTabButton = document.getElementById('form-tab');
+            if (formTabButton) {
+                formTabButton.click();
+            }
+        }
+
+        // Loads data into the form for editing
+        function editEntry(id) {
+            const entry = followUpData.find(e => e.id === id);
+            if (!entry) return;
+
+            activateFormTab(); 
+
+            // Populate form fields
+            document.getElementById('form-title').textContent = `Editing Entry S.No: ${entry.sNo}`;
+            document.getElementById('entry-id').value = entry.id;
+            document.getElementById('sNo').value = entry.sNo;
+            document.getElementById('todayDate').value = entry.todayDate || '';
+            document.getElementById('prPoNo').value = entry.prPoNo;
+            document.getElementById('prPoDate').value = entry.prPoDate || '';
+            document.getElementById('deliveryDate').value = entry.deliveryDate || '';
+            document.getElementById('vendorName').value = entry.vendorName || '';
+            document.getElementById('vendorPhone').value = entry.vendorPhone || '';
+            document.getElementById('vendorEmail').value = entry.vendorEmail || '';
+            document.getElementById('itemDescription').value = entry.itemDescription || '';
+            document.getElementById('purchaseOfficer').value = entry.purchaseOfficer || '';
+            document.getElementById('clientName').value = entry.clientName || '';
+            document.getElementById('clientPhone').value = entry.clientPhone || '';
+            document.getElementById('calendarDate').value = entry.calendarDate || '';
+            document.getElementById('initialStatus').value = entry.latestStatus || '';
+            document.getElementById('initialRemarks').value = entry.remarks || '';
+            
+            // Adjust labels for edit mode
+            document.querySelector('#initial-status-group label').textContent = 'Latest Status (Editable)';
+            document.querySelector('#initial-remarks-group label').textContent = 'Latest Remarks (Editable)';
+            
+            document.getElementById('cancel-update').classList.remove('hidden');
+            document.querySelector('#followup-form button[type="submit"]').textContent = 'Apply Changes';
+            document.getElementById('form').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Function to automatically fill form if PR/PO No. exists
+        function autoFillForm() {
+            const prPoNoInput = document.getElementById('prPoNo');
+            const prPoNoValue = prPoNoInput.value.trim();
+            const entryIdInput = document.getElementById('entry-id');
+            const entry = followUpData.find(e => e.prPoNo === prPoNoValue);
+
+            // If entry is found and not in update mode, auto-fill for edit
+            if (entry && !entryIdInput.value) {
+                editEntry(entry.id);
+                showNotification(`PR/PO No. ${prPoNoValue} found. Switching to Edit mode.`, 'info');
+            } 
+            // If prPoNo is entered but is not the one being edited, and it's a new entry, reset.
+            else if (!entry && entryIdInput.value) {
+                resetForm();
+                prPoNoInput.value = prPoNoValue;
+                showNotification('New PR/PO No. detected. Form reset to New Entry mode.', 'info');
+            } 
+            // Prevent unnecessary re-edit
+            else if (entry && entry.id === entryIdInput.value) {
+                return; 
+            }
+        }
+        document.getElementById('prPoNo').addEventListener('blur', autoFillForm);
+
+        // ===================================================================================
+        // 4. TABLE RENDERING, SORTING, AND FILTERING 
+        // ===================================================================================
+
+        function populateFilters() {
+            const poSet = new Set(['All']);
+            const clientSet = new Set(['All']);
+            followUpData.forEach(entry => {
+                if (entry.purchaseOfficer) poSet.add(entry.purchaseOfficer);
+                if (entry.clientName) clientSet.add(entry.clientName);
+            });
+
+            const poFilter = document.getElementById('filter-po');
+            const clientFilter = document.getElementById('filter-client');
+
+            poFilter.innerHTML = '<option value="All">All</option>';
+            clientFilter.innerHTML = '<option value="All">All</option>';
+
+            Array.from(poSet).sort().forEach(po => {
+                if (po && po !== 'All') poFilter.innerHTML += `<option value="${po}">${po}</option>`;
+            });
+            Array.from(clientSet).sort().forEach(client => {
+                if (client && client !== 'All') clientFilter.innerHTML += `<option value="${client}">${client}</option>`;
+            });
+
+            // Restore selected filter values after re-render/load
+            poFilter.value = poFilter.dataset.current || 'All';
+            clientFilter.value = clientFilter.dataset.current || 'All';
+        }
+
+        function filterData(data) {
+            const status = document.getElementById('filter-status').value;
+            const po = document.getElementById('filter-po').value;
+            const client = document.getElementById('filter-client').value;
+
+            document.getElementById('filter-status').dataset.current = status;
+            document.getElementById('filter-po').dataset.current = po;
+            document.getElementById('filter-client').dataset.current = client;
+
+            return data.filter(entry => {
+                const statusMatch = status === 'All' || entry.status === status;
+                const poMatch = po === 'All' || entry.purchaseOfficer === po;
+                const clientMatch = client === 'All' || entry.clientName === client;
+                return statusMatch && poMatch && clientMatch;
+            });
+        }
+
+        function sortData(data, key, direction) {
+            return data.sort((a, b) => {
+                const aValue = a[key];
+                const bValue = b[key];
+
+                if (typeof aValue === 'number' && typeof bValue === 'number') {
+                    return direction === 'asc' ? aValue - bValue : bValue - aValue;
+                }
+                
+                if (key.includes('Date')) {
+                    const aDate = new Date(aValue || '0');
+                    const bDate = new Date(bValue || '0');
+                    if (direction === 'asc') return aDate - bDate;
+                    return bDate - aDate;
+                }
+
+                const comparison = String(aValue || '').localeCompare(String(bValue || ''));
+                return direction === 'asc' ? comparison : -comparison;
+            });
+        }
+
+        function renderTable() {
+            const tableBody = document.getElementById('data-table-body');
+            const noDataMessage = document.getElementById('no-data-message');
+            tableBody.innerHTML = '';
+
+            let data = [...followUpData];
+            data = filterData(data);
+            data = sortData(data, currentSort.key, currentSort.direction);
+
+            if (data.length === 0) {
+                noDataMessage.classList.remove('hidden');
+                return;
+            } else {
+                noDataMessage.classList.add('hidden');
+            }
+
+            data.forEach(entry => {
+                const row = tableBody.insertRow();
+                const statusColor = entry.status === 'Open' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800';
+                
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${entry.sNo}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.prPoNo}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatDate(entry.prPoDate) || 'N/A'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatDate(entry.deliveryDate) || 'N/A'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.vendorName || 'N/A'}</td>
+                    <td class="px-6 py-4 max-w-xs truncate text-sm text-gray-500" title="${entry.itemDescription}">${entry.itemDescription || 'N/A'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.purchaseOfficer || 'N/A'}</td>
+                    <td class="px-6 py-4 max-w-xs truncate text-sm font-semibold text-gray-700" title="${entry.latestStatus} | ${entry.remarks}">${entry.latestStatus || 'N/A'}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                        <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColor}">
+                            ${entry.status}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                        <button onclick="editEntry('${entry.id}')" class="text-indigo-600 hover:text-indigo-900 transition-colors">Edit</button>
+                        <button onclick="openUpdateModal('${entry.id}')" class="text-blue-600 hover:text-blue-900 transition-colors">Update Status</button>
+                        <button onclick="toggleStatus('${entry.id}')" class="text-gray-600 hover:text-gray-900 transition-colors">${entry.status === 'Open' ? 'Close' : 'Re-Open'}</button>
+                        <button onclick="showDetails('${entry.id}')" class="text-green-600 hover:text-green-900 transition-colors">Details</button>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        document.querySelectorAll('#data-table th[data-sort-key]').forEach(header => {
+            header.addEventListener('click', function() {
+                const key = this.getAttribute('data-sort-key');
+                const direction = currentSort.key === key && currentSort.direction === 'asc' ? 'desc' : 'asc';
+                currentSort = { key, direction };
+                renderTable();
+            });
+        });
+
+        document.getElementById('filter-status').addEventListener('change', renderTable);
+        document.getElementById('filter-po').addEventListener('change', renderTable);
+        document.getElementById('filter-client').addEventListener('change', renderTable);
+
+
+        // ===================================================================================
+        // 5. CSV IMPORT/EXPORT LOGIC 
+        // ===================================================================================
+
+        function escapeCsv(value) {
+            if (value === null || value === undefined) return '';
+            const str = String(value);
+            // If the value contains comma, double-quote, or newline, enclose it in double quotes.
+            if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+                // Escape double quotes by doubling them up
+                return `"${str.replace(/"/g, '""')}"`;
+            }
+            return str;
+        }
+
+        function downloadCSV() {
+            if (followUpData.length === 0) {
+                showNotification('No data to export.', 'info');
+                return;
+            }
+
+            // Define the headers and corresponding keys
+            const headers = Object.values(FIELD_MAP);
+            const keys = Object.keys(FIELD_MAP);
+
+            let csvContent = headers.map(escapeCsv).join(',') + '\n';
+            
+            followUpData.forEach(entry => {
+                const row = keys.map(key => {
+                    let value = entry[key];
+                    if (key === 'latestStatus' || key === 'remarks') {
+                        // For status and remarks, export the *current* values from the main entry object
+                        value = entry[key];
+                    } else if (key === 'status') {
+                        value = entry.status;
+                    }
+                    return escapeCsv(value);
+                }).join(',');
+                csvContent += row + '\n';
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            
+            link.setAttribute("href", url);
+            link.setAttribute("download", `PR_PO_FollowUp_Tracker_${new Date().toISOString().split('T')[0]}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            showNotification('Data successfully exported to CSV.', 'success');
+        }
+
+        document.getElementById('download-csv').addEventListener('click', downloadCSV);
+
+        document.getElementById('csv-upload').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                parseCSV(event.target.result);
+            };
+            reader.readAsText(file);
+        });
+
+        function parseCSV(csvText) {
+            const lines = csvText.split('\n').filter(line => line.trim() !== '');
+            if (lines.length < 2) {
+                showNotification('CSV file appears empty or incomplete.', 'error');
+                return;
+            }
+
+            // Handle headers (first line)
+            const headers = (lines[0].match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || []).map(h => h.replace(/^"|"$/g, '').trim());
+            
+            // Create a reverse map for column header to internal key
+            const reverseFieldMap = Object.fromEntries(Object.entries(FIELD_MAP).map(([key, value]) => [value.toLowerCase(), key]));
+            const internalKeys = headers.map(h => reverseFieldMap[h.toLowerCase()]).filter(key => key);
+
+            if (internalKeys.length === 0) {
+                showNotification('Could not match any recognized headers (PR/PO No., Vendor Name, etc.) in the CSV.', 'error');
+                return;
+            }
+
+            stagingData = [];
+            const existingPrPoNos = new Set(followUpData.map(e => e.prPoNo));
+            let skippedCount = 0;
+            let newSNoStart = getNextSNo();
+
+            for (let i = 1; i < lines.length; i++) {
+                const row = lines[i].trim();
+                if (!row) continue;
+                
+                // Regex to correctly parse CSV with quoted fields
+                const values = row.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
+                
+                const entry = {};
+                for (let j = 0; j < internalKeys.length; j++) {
+                    const key = internalKeys[j];
+                    let value = values[j] ? values[j].replace(/^"|"$/g, '').trim() : '';
+                    entry[key] = value;
+                }
+
+                if (!entry.prPoNo || existingPrPoNos.has(entry.prPoNo)) {
+                    skippedCount++;
+                    continue;
+                }
+
+                entry.id = crypto.randomUUID();
+                entry.sNo = newSNoStart++;
+                entry.status = entry.status || 'Open';
+                entry.latestStatus = entry.latestStatus || 'Imported Record';
+                entry.remarks = entry.remarks || '';
+                entry.updateHistory = [{ 
+                    date: entry.todayDate || new Date().toISOString().split('T')[0], 
+                    status: entry.latestStatus, 
+                    remark: 'Imported via CSV', 
+                    type: 'Initial Import' 
+                }];
+                stagingData.push(entry);
+            }
+
+            if (stagingData.length === 0 && skippedCount === 0) {
+                showNotification('No valid, new data found in the CSV file.', 'error');
+                return;
+            }
+
+            document.getElementById('import-count').textContent = stagingData.length;
+            document.getElementById('import-headers').textContent = headers.join(', ');
+            openModal('import-modal');
+
+            if (skippedCount > 0) {
+                showNotification(`${skippedCount} entries skipped (Duplicates or missing PR/PO No.). Importing ${stagingData.length} new records.`, 'info', 5000);
+            }
+        }
+
+        document.getElementById('confirm-import').addEventListener('click', function() {
+            followUpData = [...followUpData, ...stagingData];
+            saveData();
+            stagingData = [];
+            closeModal('import-modal');
+            renderTable();
+            renderCalendar();
+            showNotification('CSV data successfully imported and saved!');
+            document.getElementById('csv-upload').value = '';
+        });
+
+        // ===================================================================================
+        // 6. MODAL & DETAILS LOGIC (UPDATED History Display)
+        // ===================================================================================
+
+        function openUpdateModal(id) {
+            const entry = followUpData.find(e => e.id === id);
+            if (!entry) return;
+
+            document.getElementById('modal-entry-id').value = id;
+            document.getElementById('modal-entry-title').textContent = `${entry.prPoNo} (${entry.vendorName})`;
+            document.getElementById('newStatus').value = entry.latestStatus;
+            document.getElementById('newRemarks').value = entry.remarks;
+            
+            openModal('update-modal');
+            renderHistoryLog(id);
+        }
+
+        function renderHistoryLog(id) {
+            const entry = followUpData.find(e => e.id === id);
+            const historyLog = document.getElementById('update-history-log');
+            
+            if (!entry || !entry.updateHistory) {
+                historyLog.innerHTML = '<p class="text-center py-4 text-gray-500">No history available.</p>';
+                return;
+            }
+
+            historyLog.innerHTML = entry.updateHistory.slice().reverse().map(h => `
+                <div class="border-b last:border-b-0 p-3 hover:bg-gray-100 transition-colors">
+                    <div class="flex justify-between text-xs text-gray-500 mb-1">
+                        <span>${formatDate(h.date, { year: 'numeric', month: 'short', day: '2-digit' })}</span>
+                        <span class="font-medium">${h.type}</span>
+                    </div>
+                    <p class="font-semibold text-gray-800">${h.status}</p>
+                    <p class="text-sm text-gray-600 italic mt-0.5">${h.remark}</p>
+                </div>
+            `).join('');
+        }
+
+        document.getElementById('status-update-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const id = document.getElementById('modal-entry-id').value;
+            const newStatus = document.getElementById('newStatus').value.trim();
+            const newRemarks = document.getElementById('newRemarks').value.trim();
+            
+            const index = followUpData.findIndex(e => e.id === id);
+            
+            if (index > -1 && newStatus) {
+                const entry = followUpData[index];
+                
+                // Only update if status or remarks have actually changed
+                if (entry.latestStatus === newStatus && entry.remarks === newRemarks) {
+                     showNotification('No changes detected for status or remarks.', 'info');
+                     closeModal('update-modal');
+                     return;
+                }
+
+                entry.latestStatus = newStatus;
+                entry.remarks = newRemarks;
+                entry.updateHistory.push({
+                    date: new Date().toISOString().split('T')[0],
+                    status: newStatus,
+                    remark: newRemarks,
+                    type: 'Manual Update'
+                });
+                
+                saveData();
+                renderTable();
+                renderCalendar();
+                showNotification(`Status for ${entry.prPoNo} updated to: ${newStatus}`);
+                closeModal('update-modal');
+                
+                // If the entry is currently in the form for editing, update the form fields as well
+                if (document.getElementById('entry-id').value === id) {
+                    document.getElementById('initialStatus').value = newStatus;
+                    document.getElementById('initialRemarks').value = newRemarks;
+                }
+
+            } else {
+                showNotification('Please enter a new status to save the update.', 'error');
+            }
+        });
+
+        let currentDetailId = null;
+
+        function showDetails(id) {
+            const entry = followUpData.find(e => e.id === id);
+            if (!entry) return;
+
+            currentDetailId = id;
+            const content = document.getElementById('details-content');
+            
+            // Build the details content
+            const detailItems = Object.entries(FIELD_MAP).map(([key, label]) => {
+                let value = entry[key];
+                if (key.includes('Date')) {
+                    value = formatDate(value, { year: 'numeric', month: 'long', day: 'numeric' });
+                } else if (key === 'status') {
+                     value = entry.status;
+                }
+                
+                return `
+                    <div class="p-2 border rounded-lg bg-gray-50">
+                        <p class="text-xs font-medium text-gray-500">${label}</p>
+                        <p class="font-semibold text-gray-800 break-words">${value || 'N/A'}</p>
+                    </div>
+                `;
+            }).join('');
+            
+            // Build the updated history log display
+            const historyHtml = `
+                <div class="col-span-2 p-2 border rounded-lg bg-gray-50">
+                    <p class="text-xs font-medium text-gray-500">Update History</p>
+                    <div class="text-sm text-gray-800 mt-1 space-y-1 max-h-40 overflow-y-auto">
+                        ${entry.updateHistory.slice().reverse().map(h => `
+                            <div class="border-b last:border-b-0 py-1">
+                                <span class="font-medium text-indigo-600">${formatDate(h.date, { day: '2-digit', month: 'short', year: 'numeric' })}</span>: 
+                                <span class="font-semibold">${h.status}</span> 
+                                <span class="text-gray-500 italic text-xs" title="${h.remark}">(${h.remark.substring(0, 40)}${h.remark.length > 40 ? '...' : ''})</span>
+                            </div>
+                        `).join('') || '<div class="text-center py-2 text-gray-500">No history available.</div>'}
+                    </div>
+                </div>
+            `;
+
+            content.innerHTML = detailItems + historyHtml;
+            openModal('details-modal');
+        }
+
+        document.getElementById('details-edit-button').addEventListener('click', () => {
+            if (currentDetailId) {
+                closeModal('details-modal');
+                editEntry(currentDetailId);
+            }
+        });
+
+        // ===================================================================================
+        // 7. MULTI-VIEW CALENDAR LOGIC (NEW/UPDATED)
+        // ===================================================================================
+
+        // --- CALENDAR HELPERS ---
+        // Helper to get the start of the week (Sunday)
+        function getWeekStart(date) {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = d.getDate() - day; // Adjust to Sunday
+            return new Date(d.setDate(diff));
+        }
+
+        // Helper to get the end of the week (Saturday)
+        function getWeekEnd(date) {
+            const start = getWeekStart(date);
+            const end = new Date(start);
+            end.setDate(start.getDate() + 6);
+            return end;
+        }
+
+        // Helper to get events for a specific date (used by all views)
+        function getEventsForDate(date) {
+            const dateStr = date.toISOString().split('T')[0];
+            return followUpData.filter(entry => entry.calendarDate === dateStr && entry.status === 'Open');
+        }
+
+        // Helper to change view and date
+        function changeCalendarView(view, date = currentCalendarDate) {
+            currentView = view;
+            // When switching to day/week view from month, center the date
+            if ((view === 'day' || view === 'week') && date.toDateString() === currentCalendarDate.toDateString()) {
+                currentCalendarDate = new Date(); // Reset to today if it's the same date as before
+            } else {
+                currentCalendarDate = date;
+            }
+            
+            // Update view buttons style
+            document.querySelectorAll('.calendar-view-btn').forEach(btn => {
+                btn.classList.remove('bg-white', 'shadow-sm');
+                if (btn.dataset.view === view) {
+                    btn.classList.add('bg-white', 'shadow-sm');
+                }
+            });
+
+            renderCalendar();
+        }
+
+
+        function renderCalendarTitle() {
+            const titleElement = document.getElementById('current-view-title');
+            if (currentView === 'month') {
+                titleElement.textContent = currentCalendarDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+            } else if (currentView === 'week') {
+                const start = getWeekStart(currentCalendarDate);
+                const end = getWeekEnd(currentCalendarDate);
+                const startStr = formatDate(start.toISOString().split('T')[0], { month: 'short', day: 'numeric' });
+                const endStr = formatDate(end.toISOString().split('T')[0], { month: 'short', day: 'numeric', year: 'numeric' });
+                titleElement.textContent = `${startStr} - ${endStr}`;
+            } else if (currentView === 'day') {
+                titleElement.textContent = formatDate(currentCalendarDate.toISOString().split('T')[0], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+            }
+        }
+
+        // --- CALENDAR RENDERER ---
+        function renderCalendar() {
+            const contentDiv = document.getElementById('calendar-content');
+            
+            if (currentView === 'month') {
+                renderMonthView(contentDiv, currentCalendarDate);
+            } else if (currentView === 'week') {
+                renderWeekView(contentDiv, currentCalendarDate);
+            } else if (currentView === 'day') {
+                renderDayView(contentDiv, currentCalendarDate);
+            }
+
+            renderCalendarTitle();
+        }
+
+        // --- MONTH VIEW (Largely kept the same) ---
+        function renderMonthView(contentDiv, date) {
+            contentDiv.innerHTML = '';
+            const calendarGrid = document.createElement('div');
+            calendarGrid.id = 'calendar-grid';
+            calendarGrid.className = 'grid grid-cols-7 gap-1';
+            
+            const year = date.getFullYear();
+            const month = date.getMonth();
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            const firstDayOfMonth = new Date(year, month, 1);
+            const lastDayOfMonth = new Date(year, month + 1, 0);
+            const startingDayOfWeek = firstDayOfMonth.getDay();
+            const totalDays = lastDayOfMonth.getDate();
+            const MAX_VISIBLE_ENTRIES = 2; // Max number of entries visible in the cell
+
+            // Pre-filter events for the month
+            const monthEntries = followUpData.filter(entry => {
+                if (!entry.calendarDate || entry.status === 'Closed') return false;
+                const entryDate = new Date(entry.calendarDate.replace(/-/g, '/'));
+                return entryDate.getFullYear() === year && entryDate.getMonth() === month;
+            }).reduce((acc, entry) => {
+                const day = new Date(entry.calendarDate.replace(/-/g, '/')).getDate();
+                if (!acc[day]) acc[day] = [];
+                acc[day].push(entry);
+                return acc;
+            }, {});
+
+            // Day headers
+            const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            let headerHtml = `<div class="grid grid-cols-7 text-center font-bold text-sm text-gray-700 border-b pb-2 mb-2">`;
+            headerHtml += dayHeaders.map(day => `<div>${day}</div>`).join('');
+            headerHtml += `</div>`;
+            contentDiv.innerHTML = headerHtml;
+            contentDiv.appendChild(calendarGrid);
+
+            // Add blank spaces for previous month's days
+            for (let i = 0; i < startingDayOfWeek; i++) {
+                calendarGrid.innerHTML += '<div class="calendar-day-cell !bg-gray-50 border-gray-100 shadow-none"></div>';
+            }
+
+            // Render days of the month
+            for (let dayNum = 1; dayNum <= totalDays; dayNum++) {
+                const currentDate = new Date(year, month, dayNum);
+                const isToday = currentDate.toDateString() === today.toDateString();
+                const entries = monthEntries[dayNum] || [];
+
+                let cellHtml = `<div class="calendar-day-number ${isToday ? 'text-indigo-700' : 'text-gray-900'}">${dayNum}</div>`;
+                
+                // Render entries
+                const visibleEntries = entries.slice(0, MAX_VISIBLE_ENTRIES);
+                visibleEntries.forEach(entry => {
+                    cellHtml += `
+                        <div class="calendar-day-entry" title="${entry.prPoNo}: ${entry.latestStatus}" onclick="showDetails('${entry.id}')">
+                            ${entry.prPoNo}
+                        </div>
+                    `;
+                });
+
+                // Show count for hidden entries
+                if (entries.length > MAX_VISIBLE_ENTRIES) {
+                    const hiddenCount = entries.length - MAX_VISIBLE_ENTRIES;
+                    cellHtml += `
+                        <div class="text-center mt-1 text-xs text-gray-500 font-medium cursor-pointer hover:text-indigo-600 transition-colors" 
+                             onclick="changeCalendarView('day', new Date(${year}, ${month}, ${dayNum}))">
+                            +${hiddenCount} more
+                        </div>
+                    `;
+                }
+
+                const dayCell = document.createElement('div');
+                dayCell.className = `calendar-day-cell ${isToday ? 'is-today' : ''}`;
+                dayCell.innerHTML = cellHtml;
+                dayCell.onclick = (e) => {
+                    // Only open day view if clicking the cell background, not an entry link
+                    if (e.target.classList.contains('calendar-day-cell')) {
+                        changeCalendarView('day', new Date(year, month, dayNum));
+                    }
+                };
+                calendarGrid.appendChild(dayCell);
+            }
+        }
+
+
+        // NEW: Updated renderDayView (Simplified)
+        function renderDayView(contentDiv, date) {
+            contentDiv.innerHTML = '';
+            const dateStr = date.toISOString().split('T')[0];
+            const entries = getEventsForDate(date);
+            
+            let html = `
+                <div class="bg-white p-4 rounded-lg shadow-xl border-t-2 border-indigo-500">
+                    <h4 class="text-xl font-semibold text-gray-800 mb-4">Follow-up Entries for ${formatDate(dateStr, { weekday: 'long', month: 'long', day: 'numeric' })}</h4>
+                    <div id="day-view-list" class="space-y-3 max-h-[70vh] overflow-y-auto p-2">
+                        ${entries.map(entry => `
+                            <div class="calendar-day-entry w-full !mt-0 !p-3 !bg-indigo-50 !text-indigo-800 border border-indigo-200 shadow-sm hover:!bg-indigo-100" 
+                                title="${entry.prPoNo}: ${entry.latestStatus} | ${entry.vendorName}" 
+                                onclick="showDetails('${entry.id}')">
+                                <div class="font-bold text-base">${entry.prPoNo} <span class="text-sm font-normal">(${entry.vendorName})</span></div>
+                                <div class="text-sm mt-1 text-indigo-700 font-semibold">Status: ${entry.latestStatus}</div>
+                                <div class="text-xs text-indigo-600 italic">Follow-up Date: ${formatDate(entry.calendarDate)}</div>
+                            </div>
+                        `).join('') || '<p class="text-center text-gray-500 py-8 text-lg bg-gray-50 rounded-lg">No open follow-up entries for this date.</p>'}
+                    </div>
+                </div>
+            `;
+            contentDiv.innerHTML = html;
+        }
+
+        // NEW: Updated renderWeekView (with All-Day Header)
+        function renderWeekView(contentDiv, date) {
+            contentDiv.innerHTML = '';
+            const startOfWeek = getWeekStart(date);
+            const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            const days = [];
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+
+            // 1. Calculate all 7 days of the week
+            for (let i = 0; i < 7; i++) {
+                const day = new Date(startOfWeek);
+                day.setDate(startOfWeek.getDate() + i);
+                days.push(day);
+            }
+
+            // 2. Build the main container
+            const container = document.createElement('div');
+            container.className = 'week-view-container bg-white rounded-lg shadow-xl border-t-2 border-indigo-500';
+
+            // 3. Build Day Headers
+            let headerHtml = `<div class="week-view-header border-t-0"><div></div>`;
+            days.forEach((day, index) => {
+                const isToday = day.toDateString() === today.toDateString();
+                const dateStr = formatDate(day.toISOString().split('T')[0], { month: 'short', day: 'numeric' });
+                headerHtml += `<div class="week-view-day-header ${isToday ? 'text-indigo-600' : ''}" onclick="changeCalendarView('day', new Date('${day.toISOString().split('T')[0]}'))">
+                                    ${dayNames[index]} 
+                                    <span class="font-normal block text-sm">${dateStr}</span>
+                               </div>`;
+            });
+            headerHtml += `</div>`;
+            container.innerHTML += headerHtml;
+
+            // 4. Build All-Day Event Row
+            let allDayHtml = `
+                <div class="week-all-day-row">
+                    <div class="all-day-label">Follow-ups</div>
+                    <div class="all-day-events-grid">
+            `;
+            days.forEach(day => {
+                const dayEvents = getEventsForDate(day);
+                let eventHtml = '';
+                dayEvents.forEach(entry => {
+                    eventHtml += `
+                        <div class="calendar-day-entry w-full !mt-0 !p-1" 
+                            title="${entry.prPoNo}: ${entry.latestStatus} | ${entry.vendorName}" 
+                            onclick="showDetails('${entry.id}')">
+                            ${entry.prPoNo}
+                        </div>
+                    `;
+                });
+                allDayHtml += `<div class="all-day-day-cell">${eventHtml}</div>`;
+            });
+            allDayHtml += `</div></div>`;
+            container.innerHTML += allDayHtml;
+
+
+            // 5. Build Time Grid (Kept empty for structure)
+            let timeGridHtml = `
+                <div class="time-grid-container border-t-0 rounded-t-none border-t-2 border-gray-200">
+                    <div class="time-column">
+                        ${Array.from({ length: 24 }).map((_, h) => `<div class="time-label">${h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM'}</div>`).join('')}
+                    </div>
+                    <div class="time-grid" style="grid-template-columns: repeat(7, 1fr);">
+                        ${Array.from({ length: 24 * 7 }).map((_, i) => {
+                            const dayIndex = i % 7;
+                            const isHourLine = (dayIndex === 0);
+                            return `<div class="time-grid-line day-view-column relative ${isHourLine ? '' : 'border-l'}"></div>`;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+            container.innerHTML += timeGridHtml;
+
+            contentDiv.appendChild(container);
+            renderCalendarTitle(); 
+        }
+
+        // --- CALENDAR NAVIGATION AND VIEW SWITCHER ---
+        document.querySelectorAll('.calendar-view-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                changeCalendarView(btn.dataset.view, new Date()); // Pass new Date to reset the context
+            });
+        });
+
+        document.getElementById('prev-btn').addEventListener('click', () => {
+            if (currentView === 'month') {
+                currentCalendarDate.setMonth(currentCalendarDate.getMonth() - 1);
+            } else if (currentView === 'week') {
+                currentCalendarDate.setDate(currentCalendarDate.getDate() - 7);
+            } else if (currentView === 'day') {
+                currentCalendarDate.setDate(currentCalendarDate.getDate() - 1);
+            }
+            renderCalendar();
+        });
+
+        document.getElementById('next-btn').addEventListener('click', () => {
+            if (currentView === 'month') {
+                currentCalendarDate.setMonth(currentCalendarDate.getMonth() + 1);
+            } else if (currentView === 'week') {
+                currentCalendarDate.setDate(currentCalendarDate.getDate() + 7);
+            } else if (currentView === 'day') {
+                currentCalendarDate.setDate(currentCalendarDate.getDate() + 1);
+            }
+            renderCalendar();
+        });
+
+        document.getElementById('today-btn').addEventListener('click', () => {
+            currentCalendarDate = new Date();
+            renderCalendar();
+        });
+
+
+        // ===================================================================================
+        // 8. TAB & INITIALIZATION LOGIC
+        // ===================================================================================
+
+        // Simple Tab Logic
+        document.querySelectorAll('[data-tab-target]').forEach(button => {
+            button.addEventListener('click', () => {
+                const targetId = button.getAttribute('data-tab-target');
+                
+                document.querySelectorAll('[role="tabpanel"]').forEach(panel => {
+                    panel.classList.add('hidden');
+                });
+                document.querySelectorAll('[role="tab"]').forEach(tab => {
+                    tab.classList.remove('text-indigo-600', 'border-indigo-600');
+                    tab.classList.add('border-transparent');
+                });
+
+                document.querySelector(targetId).classList.remove('hidden');
+                button.classList.add('text-indigo-600', 'border-indigo-600');
+                button.classList.remove('border-transparent');
+                
+                if (targetId === '#calendar') {
+                    // Re-render calendar only when its tab is active
+                    renderCalendar(); 
+                }
+            });
+        });
+
+
+        // Initialization
+        window.onload = function() {
+            loadData();
+            setDefaultDate();
+            // Default to the form tab on load
+            document.getElementById('form-tab').click();
+        };
+
+    </script>
+</body>
+</html><script>
     // ===================================================================================
     // 1. GLOBAL VARIABLES AND INITIALIZATION
     // ===================================================================================
