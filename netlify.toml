@@ -1,0 +1,9 @@
+# Configuration for the static site build
+[build]
+  # The directory to publish is the root (where index.html is)
+  publish = "."
+
+# Configuration for Serverless Functions
+[functions]
+  # The directory where Netlify should look for your JavaScript functions
+  directory = "netlify/functions"
