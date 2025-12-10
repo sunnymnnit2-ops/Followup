@@ -1,0 +1,1075 @@
+<script>
+    // ===================================================================================
+    // 1. GLOBAL VARIABLES AND INITIALIZATION
+    // ===================================================================================
+
+    let followUpData = [];
+    let currentSort = { key: 'sNo', direction: 'asc' };
+    const STORAGE_KEY = 'prPoFollowUpData'; // Kept for reference, but database is now primary
+    let currentCalendarDate = new Date();
+    let currentView = 'month'; // 'day', 'week', 'month'
+    let stagingData = []; // Temporary store for CSV import
+    
+    // All possible fields in the tracker for mapping purposes
+    const FIELD_MAP = {
+        sNo: 'S.No.',
+        todayDate: 'Today Date',
+        prPoNo: 'PR/PO No.',
+        prPoDate: 'PR/PO Dt:',
+        deliveryDate: 'Expected Delivery Date',
+        purchaseOfficer: 'Purchase Officer',
+        vendorName: 'Vendor Name',
+        vendorPhone: 'Vendor Phone No.',
+        vendorEmail: 'Vendor Email ID',
+        clientName: 'Client Name',
+        clientPhone: 'Client Phone No.',
+        itemDescription: 'Item Description',
+        latestStatus: 'Latest Status',
+        remarks: 'Remarks',
+        calendarDate: 'Calendar Follow-up Date',
+        status: 'Open/Closed Status' 
+    };
+
+    // Helper function for showing notifications
+    function showNotification(message, type = 'success', duration = 3000) {
+        const notification = document.getElementById('notification');
+        
+        notification.className = 'fixed top-4 right-4 z-50 p-4 rounded-lg shadow-lg font-medium transition-opacity duration-300';
+        
+        if (type === 'success') {
+            notification.classList.add('bg-green-100', 'text-green-800');
+        } else if (type === 'error') {
+            notification.classList.add('bg-red-100', 'text-red-800');
+        } else if (type === 'info') {
+            notification.classList.add('bg-blue-100', 'text-blue-800');
+        } else {
+            notification.classList.add('bg-blue-100', 'text-blue-800');
+        }
+
+        notification.textContent = message;
+        notification.classList.remove('hidden', 'opacity-0');
+        notification.classList.add('opacity-100');
+
+        setTimeout(() => {
+            notification.classList.remove('opacity-100');
+            notification.classList.add('opacity-0');
+            setTimeout(() => notification.classList.add('hidden'), 300);
+        }, duration);
+    }
+
+    // Helper function for modal control
+    function openModal(id) {
+        document.getElementById(id).classList.remove('hidden');
+        document.getElementById(id).classList.add('flex');
+    }
+
+    function closeModal(id) {
+        document.getElementById(id).classList.remove('flex');
+        document.getElementById(id).classList.add('hidden');
+    }
+    
+    // Utility function to get the next S.No (TEMPORARILY LOCAL)
+    function getNextSNo() {
+        return followUpData.length > 0 ? Math.max(...followUpData.map(e => e.sNo)) + 1 : 1;
+    }
+
+    // Set default date for form
+    function setDefaultDate() {
+        const todayDateInput = document.getElementById('todayDate');
+        if (!todayDateInput.value) {
+            todayDateInput.valueAsDate = new Date();
+        }
+    }
+
+    // ===================================================================================
+    // 2. DATABASE INTEGRATION FUNCTIONS (REPLACING LOCAL STORAGE)
+    // ===================================================================================
+
+    /**
+     * Sends a single entry (new or updated) to the Netlify Serverless Function for saving.
+     * @param {Object} entry - The complete entry object to save.
+     */
+    async function saveEntryToDatabase(entry, successMessage) {
+        try {
+            const response = await fetch('/.netlify/functions/save-followup-entry', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(entry),
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                // Handle API errors (e.g., database connection failure, validation error)
+                throw new Error(result.error || `Server Error: ${response.status}`);
+            }
+
+            // If a new entry, assign the ID returned by the server
+            if (!entry.id) {
+                entry.id = result.id;
+            }
+
+            // Data successfully saved to the database (or successfully received by server)
+            showNotification(successMessage || `Entry ${entry.prPoNo} saved successfully!`, 'success');
+            
+        } catch (error) {
+            console.error('Database Save Failed:', error);
+            showNotification(`Database save failed: ${error.message}. Data not persisted.`, 'error', 6000);
+        } finally {
+            // Always refresh the view after attempting to save
+            await loadData();
+        }
+    }
+
+
+    /**
+     * Loads all data from the database (via a serverless function - MUST be created later).
+     */
+    async function loadDataFromDatabase() {
+        // NOTE: You must create a second Netlify Function (e.g., 'fetch-followup-entries.js')
+        // that handles a GET request to retrieve ALL entries from your Turso/Squid database.
+        
+        try {
+            // Placeholder: Assume the function returns an empty array for now.
+            // When implemented, change the URL to your fetch function endpoint:
+            // const response = await fetch('/.netlify/functions/fetch-followup-entries');
+            // if (!response.ok) throw new Error('Failed to fetch data from server.');
+            // return await response.json(); 
+            
+            showNotification("Database fetch logic not yet implemented. Displaying local data if available.", 'info', 4000);
+            
+            // Temporary fallback to local storage for existing data if server fetch is not ready
+            const storedData = localStorage.getItem(STORAGE_KEY);
+            return storedData ? JSON.parse(storedData) : [];
+
+        } catch (error) {
+            console.error("Error loading data from database:", error);
+            showNotification(`Failed to load data from server: ${error.message}.`, 'error', 6000);
+            return []; // Return empty array on failure
+        }
+    }
+
+
+    // Utility function to load data from the database
+    async function loadData() {
+        // Fetch data from the new database function
+        let fetchedData = await loadDataFromDatabase();
+
+        // Ensure updateHistory and other defaults exist
+        followUpData = fetchedData.map(entry => ({
+            ...entry,
+            updateHistory: entry.updateHistory || [],
+            status: entry.status || 'Open', 
+            latestStatus: entry.latestStatus || entry.initialStatus || 'N/A', 
+            remarks: entry.remarks || entry.initialRemarks || '', 
+        }));
+
+        renderTable();
+        populateFilters();
+        renderCalendar();
+    }
+
+
+    // ===================================================================================
+    // 3. DATA CRUD OPERATIONS (INCLUDING SUBMISSION)
+    // ===================================================================================
+
+    // Handles form submission (Add or Edit)
+    document.getElementById('followup-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+
+        const entryId = document.getElementById('entry-id').value;
+        const isUpdate = !!entryId;
+
+        const prPoNo = document.getElementById('prPoNo').value.trim();
+
+        if (!prPoNo) {
+            showNotification('PR/PO.No. is the primary identifier and cannot be empty.', 'error');
+            return;
+        }
+
+        const currentEntryData = {
+            todayDate: document.getElementById('todayDate').value,
+            prPoNo: prPoNo,
+            prPoDate: document.getElementById('prPoDate').value,
+            deliveryDate: document.getElementById('deliveryDate').value,
+            vendorName: document.getElementById('vendorName').value,
+            vendorPhone: document.getElementById('vendorPhone').value,
+            vendorEmail: document.getElementById('vendorEmail').value,
+            itemDescription: document.getElementById('itemDescription').value,
+            purchaseOfficer: document.getElementById('purchaseOfficer').value,
+            clientName: document.getElementById('clientName').value,
+            clientPhone: document.getElementById('clientPhone').value,
+            calendarDate: document.getElementById('calendarDate').value,
+            latestStatus: document.getElementById('initialStatus').value || 'N/A',
+            remarks: document.getElementById('initialRemarks').value || '',
+            status: 'Open', // Default to Open on new/edit
+            updateHistory: [],
+        };
+        
+        let successMessage = '';
+
+        if (isUpdate) {
+            const index = followUpData.findIndex(entry => entry.id === entryId);
+            if (index > -1) {
+                const conflictEntry = followUpData.find(e => e.prPoNo === prPoNo && e.id !== entryId);
+                if (conflictEntry) {
+                    showNotification(`Error: PR/PO No. ${prPoNo} already exists for S.No. ${conflictEntry.sNo}. Please use a unique number.`, 'error');
+                    return;
+                }
+                const oldEntry = followUpData[index];
+                
+                // Inherit existing properties and history
+                currentEntryData.id = entryId;
+                currentEntryData.sNo = oldEntry.sNo;
+                currentEntryData.status = oldEntry.status; // Keep existing Open/Closed status
+                currentEntryData.updateHistory = [...oldEntry.updateHistory];
+
+                // If status or remarks changed in the main edit form, add a history entry
+                if (oldEntry.latestStatus !== currentEntryData.latestStatus || oldEntry.remarks !== currentEntryData.remarks) {
+                    currentEntryData.updateHistory.push({
+                        date: new Date().toISOString().split('T')[0],
+                        status: currentEntryData.latestStatus,
+                        remark: currentEntryData.remarks,
+                        type: 'Entry Edit'
+                    });
+                }
+                
+                // Update the local array temporarily before sending to server
+                followUpData[index] = currentEntryData;
+                successMessage = `Entry ${prPoNo} updated successfully!`;
+
+            } else {
+                showNotification('Error: Could not find entry for update.', 'error');
+                return;
+            }
+
+        } else {
+            // NEW ENTRY
+            const conflictEntry = followUpData.find(e => e.prPoNo === prPoNo);
+            if (conflictEntry) {
+                showNotification(`Error: PR/PO No. ${prPoNo} already exists for S.No. ${conflictEntry.sNo}. Please use a unique number or edit the existing entry.`, 'error');
+                return;
+            }
+            
+            // Assign temporary ID and S.No. for array management before server response
+            currentEntryData.id = crypto.randomUUID(); 
+            currentEntryData.sNo = getNextSNo();
+            
+            currentEntryData.updateHistory.push({
+                date: currentEntryData.todayDate || new Date().toISOString().split('T')[0],
+                status: currentEntryData.latestStatus,
+                remark: currentEntryData.remarks,
+                type: 'Initial Entry'
+            });
+
+            followUpData.push(currentEntryData);
+            successMessage = `New Entry ${prPoNo} added successfully!`;
+        }
+
+        // *** Use the database function instead of saveData() ***
+        await saveEntryToDatabase(currentEntryData, successMessage); 
+        
+        resetForm();
+        activateTab('table-tab'); // Switch to table view
+    });
+
+
+    // Function to toggle the Open/Closed status
+    function toggleStatus(id) {
+        const index = followUpData.findIndex(e => e.id === id);
+        if (index > -1) {
+            const entry = followUpData[index];
+            const newStatus = entry.status === 'Open' ? 'Closed' : 'Open';
+            
+            entry.status = newStatus;
+            entry.updateHistory.push({
+                date: new Date().toISOString().split('T')[0],
+                status: entry.latestStatus,
+                remark: `Entry marked as ${newStatus}`,
+                type: 'Status Toggle'
+            });
+            
+            // *** Use the database function instead of saveData() ***
+            saveEntryToDatabase(entry, `Entry ${entry.prPoNo} marked as ${newStatus}.`);
+        }
+    }
+
+
+    // ===================================================================================
+    // 4. TAB CONTROL & FORM LOGIC (Minor changes)
+    // ===================================================================================
+
+    // Function to simplify tab activation
+    function activateTab(tabId) {
+        const button = document.getElementById(tabId);
+        if (button) {
+            // Find target content panel ID
+            const targetId = button.getAttribute('data-tab-target');
+            
+            // Hide all panels
+            document.querySelectorAll('[role="tabpanel"]').forEach(panel => {
+                panel.classList.add('hidden');
+            });
+            // Deactivate all tabs
+            document.querySelectorAll('[role="tab"]').forEach(tab => {
+                tab.classList.remove('text-indigo-600', 'border-indigo-600');
+                tab.classList.add('border-transparent');
+            });
+
+            // Activate target panel and tab
+            document.querySelector(targetId).classList.remove('hidden');
+            button.classList.add('text-indigo-600', 'border-indigo-600');
+            button.classList.remove('border-transparent');
+            
+            if (targetId === '#calendar') {
+                renderCalendar(); 
+            }
+        }
+    }
+    
+    // Simple Tab Logic (Modified to use activateTab)
+    document.querySelectorAll('[data-tab-target]').forEach(button => {
+        button.addEventListener('click', () => {
+            activateTab(button.id);
+        });
+    });
+
+
+    // Loads data into the form for editing (UNMODIFIED)
+    function editEntry(id) {
+        const entry = followUpData.find(e => e.id === id);
+        if (!entry) return;
+        activateTab('form-tab');
+
+        // Populate form fields
+        document.getElementById('form-title').textContent = `Editing Entry S.No: ${entry.sNo}`;
+        document.getElementById('entry-id').value = entry.id;
+        document.getElementById('sNo').value = entry.sNo;
+        document.getElementById('todayDate').value = entry.todayDate || '';
+        document.getElementById('prPoNo').value = entry.prPoNo;
+        document.getElementById('prPoDate').value = entry.prPoDate || '';
+        document.getElementById('deliveryDate').value = entry.deliveryDate || '';
+        document.getElementById('vendorName').value = entry.vendorName || '';
+        document.getElementById('vendorPhone').value = entry.vendorPhone || '';
+        document.getElementById('vendorEmail').value = entry.vendorEmail || '';
+        document.getElementById('itemDescription').value = entry.itemDescription || '';
+        document.getElementById('purchaseOfficer').value = entry.purchaseOfficer || '';
+        document.getElementById('clientName').value = entry.clientName || '';
+        document.getElementById('clientPhone').value = entry.clientPhone || '';
+        document.getElementById('calendarDate').value = entry.calendarDate || '';
+        document.getElementById('initialStatus').value = entry.latestStatus || '';
+        document.getElementById('initialRemarks').value = entry.remarks || '';
+        
+        document.querySelector('#initial-status-group label').textContent = 'Current Status';
+        document.querySelector('#initial-remarks-group label').textContent = 'Current Remarks';
+        
+        document.getElementById('cancel-update').classList.remove('hidden');
+        document.querySelector('#followup-form button[type="submit"]').textContent = 'Apply Changes';
+        document.getElementById('form').scrollIntoView({ behavior: 'smooth' });
+        closeModal('details-modal');
+    }
+
+    // Resets the form after submission or cancellation (UNMODIFIED)
+    function resetForm() {
+        document.getElementById('followup-form').reset();
+        document.getElementById('entry-id').value = '';
+        document.getElementById('sNo').value = 'Auto-Generated';
+        document.getElementById('form-title').textContent = 'New Follow-up Entry';
+        document.getElementById('cancel-update').classList.add('hidden');
+        document.querySelector('#followup-form button[type="submit"]').textContent = 'Save Entry';
+        document.getElementById('initialStatus').value = 'Order Placed';
+        document.querySelector('#initial-status-group label').textContent = 'Current Status';
+        document.querySelector('#initial-remarks-group label').textContent = 'Current Remarks';
+        setDefaultDate();
+    }
+
+    // Cancel Update button
+    document.getElementById('cancel-update').addEventListener('click', function() {
+        resetForm();
+        showNotification('Update cancelled. Form reset to New Entry mode.', 'info');
+    });
+
+    // Auto-fill logic (UNMODIFIED)
+    function autoFillForm() {
+        const prPoNoInput = document.getElementById('prPoNo');
+        const prPoNoValue = prPoNoInput.value.trim();
+        const entryIdInput = document.getElementById('entry-id');
+
+        if (!prPoNoValue) {
+            if (entryIdInput.value) resetForm();
+            return;
+        }
+
+        const entry = followUpData.find(e => e.prPoNo === prPoNoValue);
+
+        if (entry && entryIdInput.value !== entry.id) {
+            // Found existing entry, auto-fill for edit
+            editEntry(entry.id);
+            showNotification(`Existing PR/PO No. ${prPoNoValue} found. Switched to Edit mode.`, 'info');
+        } else if (!entry && entryIdInput.value) {
+            resetForm();
+            prPoNoInput.value = prPoNoValue;
+            showNotification('New PR/PO No. detected. Form reset to New Entry mode.', 'info');
+        } else if (entry && entry.id === entryIdInput.value) {
+            return;
+        }
+    }
+    document.getElementById('prPoNo').addEventListener('blur', autoFillForm);
+
+    // ===================================================================================
+    // 5. TABLE RENDERING, SORTING, AND FILTERING (Unmodified logic)
+    // ===================================================================================
+    
+    function populateFilters() {
+        const poSet = new Set(['All']);
+        const clientSet = new Set(['All']);
+        followUpData.forEach(entry => {
+            if (entry.purchaseOfficer) poSet.add(entry.purchaseOfficer);
+            if (entry.clientName) clientSet.add(entry.clientName);
+        });
+
+        const poFilter = document.getElementById('filter-po');
+        const clientFilter = document.getElementById('filter-client');
+
+        poFilter.innerHTML = '<option value="All">All</option>';
+        clientFilter.innerHTML = '<option value="All">All</option>';
+        
+        Array.from(poSet).sort().forEach(po => {
+            if (po && po !== 'All') poFilter.innerHTML += `<option value="${po}">${po}</option>`;
+        });
+        Array.from(clientSet).sort().forEach(client => {
+            if (client && client !== 'All') clientFilter.innerHTML += `<option value="${client}">${client}</option>`;
+        });
+        
+        poFilter.value = poFilter.dataset.current || 'All';
+        clientFilter.value = clientFilter.dataset.current || 'All';
+    }
+
+    function filterData(data) {
+        const status = document.getElementById('filter-status').value;
+        const po = document.getElementById('filter-po').value;
+        const client = document.getElementById('filter-client').value;
+
+        document.getElementById('filter-po').dataset.current = po;
+        document.getElementById('filter-client').dataset.current = client;
+
+        return data.filter(entry => {
+            const statusMatch = status === 'All' || entry.status === status;
+            const poMatch = po === 'All' || entry.purchaseOfficer === po;
+            const clientMatch = client === 'All' || entry.clientName === client;
+            return statusMatch && poMatch && clientMatch;
+        });
+    }
+
+    function sortData(data, key, direction) {
+        return data.sort((a, b) => {
+            const aValue = a[key];
+            const bValue = b[key];
+
+            if (typeof aValue === 'number' && typeof bValue === 'number') {
+                return direction === 'asc' ? aValue - bValue : bValue - aValue;
+            }
+
+            if (key.includes('Date')) {
+                const aDate = new Date(aValue);
+                const bDate = new Date(bValue);
+                if (direction === 'asc') return aDate - bDate;
+                return bDate - aDate;
+            }
+
+            const aStr = String(aValue || '').toLowerCase();
+            const bStr = String(bValue || '').toLowerCase();
+
+            if (aStr < bStr) return direction === 'asc' ? -1 : 1;
+            if (aStr > bStr) return direction === 'asc' ? 1 : -1;
+            return 0;
+        });
+    }
+
+    function renderTable() {
+        const tableBody = document.getElementById('data-table-body');
+        const noDataMessage = document.getElementById('no-data-message');
+        
+        let filteredData = filterData(followUpData);
+        let sortedData = sortData(filteredData, currentSort.key, currentSort.direction);
+
+        tableBody.innerHTML = '';
+
+        if (sortedData.length === 0) {
+            noDataMessage.classList.remove('hidden');
+            return;
+        }
+
+        noDataMessage.classList.add('hidden');
+
+        sortedData.forEach(entry => {
+            const statusColor = entry.status === 'Open' ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800';
+            
+            const row = document.createElement('tr');
+            row.className = 'hover:bg-gray-50 transition-colors';
+            
+            row.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${entry.sNo}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.prPoNo}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.prPoDate || 'N/A'}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.deliveryDate || 'N/A'}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.vendorName || 'N/A'}</td>
+                <td class="px-6 py-4 max-w-xs truncate text-sm text-gray-500" title="${entry.itemDescription}">${entry.itemDescription || 'N/A'}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.purchaseOfficer || 'N/A'}</td>
+                <td class="px-6 py-4 max-w-xs truncate text-sm font-semibold text-gray-700" title="${entry.latestStatus} | ${entry.remarks}">${entry.latestStatus || 'N/A'}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm">
+                    <span class="px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${statusColor}">
+                        ${entry.status}
+                    </span>
+                </td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                    <button onclick="editEntry('${entry.id}')" class="text-indigo-600 hover:text-indigo-900 transition-colors">Edit</button>
+                    <button onclick="openUpdateModal('${entry.id}')" class="text-blue-600 hover:text-blue-900 transition-colors">Update Status</button>
+                    <button onclick="toggleStatus('${entry.id}')" class="text-gray-600 hover:text-gray-900 transition-colors">${entry.status === 'Open' ? 'Close' : 'Re-Open'}</button>
+                    <button onclick="showDetails('${entry.id}')" class="text-green-600 hover:text-green-900 transition-colors">Details</button>
+                </td>
+            `;
+            tableBody.appendChild(row);
+        });
+    }
+
+    document.querySelectorAll('#data-table th[data-sort-key]').forEach(header => {
+        header.addEventListener('click', function() {
+            const key = this.getAttribute('data-sort-key');
+            const direction = currentSort.key === key && currentSort.direction === 'asc' ? 'desc' : 'asc';
+            currentSort = { key, direction };
+            renderTable();
+        });
+    });
+    document.getElementById('filter-status').addEventListener('change', renderTable);
+    document.getElementById('filter-po').addEventListener('change', renderTable);
+    document.getElementById('filter-client').addEventListener('change', renderTable);
+
+
+    // ===================================================================================
+    // 6. CSV IMPORT/EXPORT LOGIC (Minor update to import confirmation)
+    // ===================================================================================
+    
+    // Function to convert data to CSV format (UNMODIFIED)
+    function convertToCSV(objArray) {
+        const array = [Object.keys(FIELD_MAP)].concat(objArray.map(e => {
+            // Map internal keys to ensure correct order and full field list
+            return Object.keys(FIELD_MAP).map(key => {
+                let value = e[key] !== undefined && e[key] !== null ? e[key] : '';
+                // Handle complex fields like updateHistory (optional, simple text output here)
+                if (key === 'updateHistory') {
+                    value = e.updateHistory.map(h => `${h.date}: ${h.status} (${h.remark})`).join(' | ');
+                }
+                // Escape commas and quotes
+                value = String(value).replace(/"/g, '""');
+                if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+                    return `"${value}"`;
+                }
+                return value;
+            }).join(',');
+        }));
+
+        return array.map(e => e.join(',')).join('\n');
+    }
+
+    // Function to handle CSV download (UNMODIFIED)
+    document.getElementById('download-csv').addEventListener('click', function() {
+        const csv = convertToCSV(followUpData);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement('a');
+        
+        link.href = URL.createObjectURL(blob);
+        link.setAttribute('download', 'pr_po_followup_tracker.csv');
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        showNotification('Data exported to CSV successfully!');
+    });
+
+    // Function to handle CSV file upload (UNMODIFIED)
+    document.getElementById('csv-upload').addEventListener('change', function(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            parseCSV(e.target.result);
+        };
+        reader.readAsText(file);
+    });
+
+    // Function to parse CSV content (UNMODIFIED)
+    function parseCSV(csvText) {
+        const lines = csvText.trim().split('\n');
+        if (lines.length < 2) {
+            showNotification('CSV file is empty or contains only headers.', 'error');
+            return;
+        }
+        
+        const headers = lines[0].match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g)
+            .map(h => h.replace(/^"|"$/g, '').trim());
+
+        const reverseFieldMap = Object.fromEntries(Object.entries(FIELD_MAP).map(([key, value]) => [value.toLowerCase(), key]));
+        const internalKeys = headers.map(h => reverseFieldMap[h.toLowerCase()]).filter(key => key);
+
+        if (internalKeys.length === 0) {
+            showNotification('Could not match any recognized headers (PR/PO No., Vendor Name, etc.) in the CSV.', 'error');
+            return;
+        }
+
+        stagingData = [];
+        const existingPrPoNos = new Set(followUpData.map(e => e.prPoNo));
+        let skippedCount = 0;
+        let newSNoStart = getNextSNo();
+
+        for (let i = 1; i < lines.length; i++) {
+            const row = lines[i].trim();
+            if (!row) continue;
+            // Robust parsing for quoted fields
+            const values = row.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
+            
+            const entry = {};
+            for (let j = 0; j < internalKeys.length; j++) {
+                const key = internalKeys[j];
+                let value = values[j] ? values[j].replace(/^"|"$/g, '').trim() : '';
+                entry[key] = value;
+            }
+
+            if (!entry.prPoNo || existingPrPoNos.has(entry.prPoNo)) {
+                skippedCount++;
+                continue;
+            }
+
+            entry.id = crypto.randomUUID();
+            entry.sNo = newSNoStart++;
+            entry.status = entry.status || 'Open';
+            entry.latestStatus = entry.latestStatus || 'Imported Record';
+            entry.remarks = entry.remarks || '';
+            entry.updateHistory = [{ 
+                date: entry.todayDate || new Date().toISOString().split('T')[0], 
+                status: entry.latestStatus, 
+                remark: 'Imported via CSV', 
+                type: 'Initial Import' 
+            }];
+            stagingData.push(entry);
+        }
+
+        if (stagingData.length === 0 && skippedCount === 0) {
+            showNotification('No valid, new data found in the CSV file.', 'error');
+            return;
+        }
+
+        document.getElementById('import-count').textContent = stagingData.length;
+        document.getElementById('import-headers').textContent = headers.join(', ');
+        openModal('import-modal');
+
+        if (skippedCount > 0) {
+            showNotification(`${skippedCount} entries skipped (Duplicates or missing PR/PO No.). Importing ${stagingData.length} new records.`, 'info', 5000);
+        }
+    }
+
+    // Function to confirm import (UPDATED to mention database)
+    document.getElementById('confirm-import').addEventListener('click', async function() {
+        // NOTE: For large imports, you should create a dedicated Netlify Function 
+        // (e.g., 'bulk-import-entries.js') that accepts the array and handles 
+        // database insertion more efficiently than saving one by one.
+        
+        // Temporarily, we will save one by one.
+        for (const entry of stagingData) {
+            await saveEntryToDatabase(entry, `Imported ${entry.prPoNo}.`);
+        }
+
+        stagingData = [];
+        closeModal('import-modal');
+        renderTable();
+        renderCalendar();
+        showNotification('CSV data successfully imported and saved to database!');
+        document.getElementById('csv-upload').value = '';
+    });
+
+
+    // ===================================================================================
+    // 7. MODAL & DETAILS LOGIC (Updated to use database function)
+    // ===================================================================================
+
+    function openUpdateModal(id) {
+        const entry = followUpData.find(e => e.id === id);
+        if (!entry) return;
+
+        document.getElementById('modal-entry-id').value = id;
+        document.getElementById('modal-entry-title').textContent = `${entry.prPoNo} (${entry.vendorName})`;
+        document.getElementById('newStatus').value = entry.latestStatus;
+        document.getElementById('newRemarks').value = '';
+        renderHistory(entry.updateHistory);
+        openModal('update-modal');
+    }
+
+    function renderHistory(history) {
+        const log = document.getElementById('update-history-log');
+        log.innerHTML = '';
+
+        if (!history || history.length === 0) {
+            log.innerHTML = '<p class="p-4 text-center text-gray-500">No update history recorded.</p>';
+            return;
+        }
+
+        // Reverse history to show latest first
+        history.slice().reverse().forEach(h => {
+            const item = document.createElement('div');
+            item.className = 'p-3 border-b last:border-b-0 hover:bg-gray-100 transition-colors';
+            item.innerHTML = `
+                <p class="text-xs text-gray-500">${h.type} on ${h.date}</p>
+                <p class="font-medium text-gray-800">${h.status}</p>
+                <p class="text-sm text-gray-600 italic">${h.remark}</p>
+            `;
+            log.appendChild(item);
+        });
+    }
+
+    // Status Update Form Submission
+    document.getElementById('status-update-form').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        
+        const id = document.getElementById('modal-entry-id').value;
+        const newStatus = document.getElementById('newStatus').value.trim();
+        const newRemarks = document.getElementById('newRemarks').value.trim();
+        const index = followUpData.findIndex(e => e.id === id);
+
+        if (index > -1 && newStatus) {
+            const entry = followUpData[index];
+            entry.latestStatus = newStatus;
+            entry.remarks = newRemarks;
+            entry.updateHistory.push({
+                date: new Date().toISOString().split('T')[0],
+                status: newStatus,
+                remark: newRemarks,
+                type: 'Manual Update'
+            });
+            
+            // *** Use the database function instead of saveData() ***
+            await saveEntryToDatabase(entry, `Status for ${entry.prPoNo} updated to: ${newStatus}`);
+
+            closeModal('update-modal');
+            
+            // If the entry being edited in the main form, refresh the form
+            if (document.getElementById('entry-id').value === id) {
+                editEntry(id);
+            }
+        } else {
+            showNotification('Please enter a new status to save the update.', 'error');
+        }
+    });
+
+    let currentDetailId = null;
+
+    function showDetails(id) {
+        const entry = followUpData.find(e => e.id === id);
+        if (!entry) return;
+
+        currentDetailId = id;
+        const content = document.getElementById('details-content');
+        content.innerHTML = `
+            ${Object.entries(FIELD_MAP).map(([key, label]) => `
+                <div class="p-2 border rounded-lg bg-gray-50">
+                    <p class="text-xs font-medium text-gray-500">${label}</p>
+                    <p class="font-semibold text-gray-800 break-words">${entry[key] || 'N/A'}</p>
+                </div>
+            `).join('')}
+            <div class="col-span-2 p-2 border rounded-lg bg-gray-50">
+                <p class="text-xs font-medium text-gray-500">Update History</p>
+                <div class="text-sm text-gray-800 mt-1 space-y-1 max-h-40 overflow-y-auto">
+                    ${entry.updateHistory.slice().reverse().map(h => 
+                        `<div class="border-b last:border-b-0 py-1">
+                            <span class="font-medium">${h.date}</span>: ${h.status}
+                        </div>`
+                    ).join('') || 'None'}
+                </div>
+            </div>
+        `;
+        openModal('details-modal');
+    }
+
+    document.getElementById('details-edit-button').addEventListener('click', () => {
+        if (currentDetailId) {
+            editEntry(currentDetailId);
+        }
+    });
+    
+    // ===================================================================================
+    // 8. MULTI-VIEW CALENDAR LOGIC (Unmodified logic)
+    // ===================================================================================
+
+    // --- CALENDAR HELPERS ---
+    function getEventsForDate(date) {
+        const dateStr = date.toISOString().split('T')[0];
+        return followUpData.filter(entry => 
+            entry.status === 'Open' && entry.calendarDate === dateStr
+        );
+    }
+
+    function renderCalendar() {
+        const contentDiv = document.getElementById('calendar-content');
+        updateCalendarTitle();
+        
+        document.querySelectorAll('.calendar-view-btn').forEach(btn => {
+            btn.classList.remove('bg-white', 'shadow-sm');
+            if (btn.getAttribute('data-view') === currentView) {
+                btn.classList.add('bg-white', 'shadow-sm');
+            }
+        });
+
+        if (currentView === 'month') {
+            renderMonthView(contentDiv, currentCalendarDate);
+        } else if (currentView === 'week') {
+            renderWeekView(contentDiv, currentCalendarDate);
+        } else if (currentView === 'day') {
+            renderDayView(contentDiv, currentCalendarDate);
+        }
+    }
+
+    function formatDate(date, options = {}) {
+        const defaultOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+        return date.toLocaleDateString(undefined, { ...defaultOptions, ...options });
+    }
+
+    function updateCalendarTitle() {
+        const titleElement = document.getElementById('current-view-title');
+        if (currentView === 'month') {
+            titleElement.textContent = formatDate(currentCalendarDate, { year: 'numeric', month: 'long' });
+        } else if (currentView === 'week') {
+            const start = getWeekStart(currentCalendarDate);
+            const end = new Date(start);
+            end.setDate(start.getDate() + 6);
+            const startStr = formatDate(start, { month: 'short', day: 'numeric', year: 'numeric' });
+            const endStr = formatDate(end, { month: 'short', day: 'numeric', year: 'numeric' });
+            titleElement.textContent = `${startStr} - ${endStr}`;
+        } else if (currentView === 'day') {
+            titleElement.textContent = formatDate(currentCalendarDate, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        }
+    }
+
+    // --- NAVIGATION ---
+    document.getElementById('prev-btn').addEventListener('click', () => {
+        if (currentView === 'month') {
+            currentCalendarDate.setMonth(currentCalendarDate.getMonth() - 1);
+        } else if (currentView === 'week') {
+            currentCalendarDate.setDate(currentCalendarDate.getDate() - 7);
+        } else if (currentView === 'day') {
+            currentCalendarDate.setDate(currentCalendarDate.getDate() - 1);
+        }
+        renderCalendar();
+    });
+
+    document.getElementById('next-btn').addEventListener('click', () => {
+        if (currentView === 'month') {
+            currentCalendarDate.setMonth(currentCalendarDate.getMonth() + 1);
+        } else if (currentView === 'week') {
+            currentCalendarDate.setDate(currentCalendarDate.getDate() + 7);
+        } else if (currentView === 'day') {
+            currentCalendarDate.setDate(currentCalendarDate.getDate() + 1);
+        }
+        renderCalendar();
+    });
+
+    document.getElementById('today-btn').addEventListener('click', () => {
+        currentCalendarDate = new Date();
+        renderCalendar();
+    });
+
+    document.querySelectorAll('.calendar-view-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            currentView = this.getAttribute('data-view');
+            renderCalendar();
+        });
+    });
+
+    // --- MONTH VIEW ---
+    function renderMonthView(contentDiv, date) {
+        contentDiv.innerHTML = '';
+        const calendarGrid = document.createElement('div');
+        calendarGrid.id = 'calendar-grid';
+        calendarGrid.className = 'grid grid-cols-7 gap-1';
+
+        const year = date.getFullYear();
+        const month = date.getMonth();
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const firstDayOfMonth = new Date(year, month, 1);
+        const lastDayOfMonth = new Date(year, month + 1, 0);
+        const startingDayOfWeek = firstDayOfMonth.getDay(); // 0 (Sun) to 6 (Sat)
+        const totalDays = lastDayOfMonth.getDate();
+        const MAX_VISIBLE_ENTRIES = 2;
+
+        const monthEntries = followUpData.filter(entry => {
+            if (!entry.calendarDate || entry.status === 'Closed') return false;
+            const entryDate = new Date(entry.calendarDate);
+            return entryDate.getFullYear() === year && entryDate.getMonth() === month;
+        }).reduce((acc, entry) => {
+            const day = new Date(entry.calendarDate).getDate();
+            if (!acc[day]) acc[day] = [];
+            acc[day].push(entry);
+            return acc;
+        }, {});
+
+        // Day headers
+        const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        let headerHtml = `<div class="grid grid-cols-7 text-center font-bold text-sm text-gray-700 border-b pb-2 mb-2">`;
+        headerHtml += dayHeaders.map(day => `<div>${day}</div>`).join('');
+        headerHtml += `</div>`;
+        contentDiv.innerHTML = headerHtml;
+        contentDiv.appendChild(calendarGrid);
+
+        // Add blank spaces for previous month's days
+        for (let i = 0; i < startingDayOfWeek; i++) {
+            calendarGrid.innerHTML += `<div class="p-2 calendar-day-cell bg-gray-100 border-dashed"></div>`;
+        }
+
+        // Render current month's days
+        for (let day = 1; day <= totalDays; day++) {
+            const currentDate = new Date(year, month, day);
+            const isToday = currentDate.getTime() === today.getTime();
+            
+            const dayCell = document.createElement('div');
+            dayCell.className = `calendar-day-cell ${isToday ? 'is-today' : ''}`;
+            
+            let dayHtml = `<div class="calendar-day-number">${day}</div>`;
+
+            const entries = monthEntries[day] || [];
+            let hiddenCount = 0;
+            
+            entries.forEach((entry, index) => {
+                if (index < MAX_VISIBLE_ENTRIES) {
+                    dayHtml += `<div class="calendar-day-entry" title="${entry.prPoNo}: ${entry.latestStatus}" onclick="showDetails('${entry.id}')">${entry.prPoNo}</div>`;
+                } else {
+                    hiddenCount++;
+                }
+            });
+
+            if (hiddenCount > 0) {
+                dayHtml += `<div class="text-xs mt-1 text-gray-500 font-medium">+${hiddenCount} more</div>`;
+            }
+
+            dayCell.innerHTML = dayHtml;
+            calendarGrid.appendChild(dayCell);
+        }
+    }
+    
+    // --- WEEK VIEW ---
+    function getWeekStart(date) {
+        const day = date.getDay(); // 0 is Sunday
+        const diff = date.getDate() - day; // adjust date to start of week
+        const startOfWeek = new Date(date.setDate(diff));
+        startOfWeek.setHours(0, 0, 0, 0);
+        return startOfWeek;
+    }
+
+    function renderWeekView(contentDiv, date) {
+        contentDiv.innerHTML = '';
+        const startOfWeek = getWeekStart(date);
+        const days = Array.from({ length: 7 }).map((_, i) => {
+            const d = new Date(startOfWeek);
+            d.setDate(startOfWeek.getDate() + i);
+            return d;
+        });
+
+        // Render Header
+        const headerDiv = document.createElement('div');
+        headerDiv.className = 'week-view-header';
+        headerDiv.innerHTML = `<div></div>` + days.map(d => {
+            const isToday = d.toDateString() === new Date().toDateString();
+            return `<div class="week-view-day-header ${isToday ? 'text-indigo-600' : 'text-gray-700'}" onclick="currentCalendarDate = new Date('${d.toISOString()}'); currentView='day'; renderCalendar();">
+                        ${d.toLocaleDateString(undefined, { weekday: 'short' })}<br>${d.getDate()}
+                    </div>`;
+        }).join('');
+        contentDiv.appendChild(headerDiv);
+
+        // Render Grid
+        let html = `
+            <div class="time-grid-container">
+                <div class="time-column">
+                    ${Array.from({ length: 24 }).map((_, h) => `<div class="time-label">${h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM'}</div>`).join('')}
+                </div>
+                <div class="time-grid" style="grid-template-columns: repeat(7, 1fr);">
+                    ${Array.from({ length: 24 * 7 }).map((_, i) => { 
+                        const dayIndex = i % 7;
+                        const hourIndex = Math.floor(i / 7);
+                        const eventDay = days[dayIndex];
+                        
+                        let content = '';
+                        if (hourIndex === 9) { // Arbitrarily stack events in the 9 AM slot
+                            const dayEntries = getEventsForDate(eventDay);
+                            content = dayEntries.map(entry => `
+                                <div class="calendar-day-entry w-full" title="${entry.prPoNo}: ${entry.latestStatus}" onclick="showDetails('${entry.id}')">
+                                    ${entry.prPoNo}
+                                </div>
+                            `).join('');
+                        }
+                        return `<div class="time-grid-line day-view-column relative">
+                            <div class="absolute inset-0 p-1 space-y-1">${content}</div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+        contentDiv.innerHTML += html;
+    }
+
+
+    // --- DAY VIEW ---
+    function renderDayView(contentDiv, date) {
+        contentDiv.innerHTML = '';
+        const today = new Date();
+        const dateStr = date.toISOString().split('T')[0];
+        const entries = getEventsForDate(date);
+        
+        let html = `
+            <div class="time-grid-container">
+                <div class="time-column">
+                    ${Array.from({ length: 24 }).map((_, h) => `<div class="time-label">${h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM'}</div>`).join('')}
+                </div>
+                <div class="time-grid">
+                    ${Array.from({ length: 24 }).map((_, h) => `<div class="time-grid-line day-view-column" id="day-hour-${h}"></div>`).join('')}
+                </div>
+            </div>
+        `;
+        contentDiv.innerHTML = html;
+
+        // Simulate positioning on the timeline (All events are 'all-day' since we only track date)
+        const dayGrid = contentDiv.querySelector('.time-grid');
+        entries.forEach((entry, index) => {
+            // Determine a pseudo-time slot for visual stacking
+            const hour = 9 + (index % 8); // Assign events roughly between 9 AM and 5 PM
+            const eventDiv = document.createElement('div');
+            eventDiv.className = 'timeline-event calendar-day-entry';
+            eventDiv.style.top = `${(hour * 60) + (index * 5)}px`; // Position by hour in pixels, add slight offset for overlap
+            eventDiv.style.width = 'calc(100% - 10px)';
+            eventDiv.style.left = '5px';
+            eventDiv.textContent = entry.prPoNo;
+            eventDiv.title = entry.prPoNo + ': ' + entry.latestStatus;
+            eventDiv.onclick = () => showDetails(entry.id);
+            dayGrid.appendChild(eventDiv);
+        });
+
+        if (entries.length === 0) {
+            dayGrid.innerHTML = '<p class="text-center text-gray-500 p-4 absolute inset-0 pt-8">No follow-up entries for this day.</p>';
+        }
+    }
+
+
+    // ===================================================================================
+    // 9. INITIALIZATION LOGIC
+    // ===================================================================================
+
+    // Initialization
+    window.onload = async function() {
+        await loadData(); // Load data from the database function
+        setDefaultDate();
+        activateTab('form-tab'); // Default to the form tab on load
+    };
+
+</script>
